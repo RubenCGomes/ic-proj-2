@@ -46,6 +46,12 @@ else()
     message(WARNING "OpenCV not found - Skipping OpenCV exercises (cv_extract_channel, cv_image_effects)")
 endif()
 
+# Golomb main program
+add_executable(golomb_main
+        src/golomb_main.cpp
+        src/golomb.cpp
+)
+
 # Add other executables here (non-OpenCV dependent)
 # Example:
 # add_executable(other_program src/other_program.cpp)
