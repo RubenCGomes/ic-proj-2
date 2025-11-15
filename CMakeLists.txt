@@ -1,58 +1,56 @@
 cmake_minimum_required(VERSION 3.20)
-project(ic-proj-2)
+project(ic-proj-2 LANGUAGES CXX)
 
-# Set the C++ standard
 set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Define _GNU_SOURCE
-add_definitions(-D_GNU_SOURCE)
+set(COMMON_WARNING_FLAGS -Wall -Wextra -Wpedantic)
 
-# Set the output directory
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 
-# Add include directories
 set(INCLUDE_DIR "${CMAKE_SOURCE_DIR}/include")
-include_directories(${INCLUDE_DIR})
 
-# Try to find OpenCV package (only core modules needed)
-find_package(OpenCV QUIET COMPONENTS core imgproc imgcodecs)
-
-# Only build OpenCV exercises if OpenCV is found
-if(OpenCV_FOUND)
-    message(STATUS "OpenCV found - Building OpenCV exercises")
-    include_directories(${OpenCV_INCLUDE_DIRS})
-
-    # Exercise 1: Channel Extractor (single file with inline function in header)
-    add_executable(cv_extract_channel
-        src/cv_extract_channel.cpp
-    )
-    target_include_directories(cv_extract_channel PUBLIC ${INCLUDE_DIR})
-    target_link_libraries(cv_extract_channel ${OpenCV_LIBS})
-    target_compile_options(cv_extract_channel PRIVATE -Wall -Wextra -Wpedantic)
-
-    # Exercise 2: Image Effects (separate implementation files)
-    add_executable(cv_image_effects
-        src/cv_image_effects.cpp
-        src/effects/negative.cpp
-        src/effects/mirror.cpp
-        src/effects/rotate.cpp
-        src/effects/brightness.cpp
-    )
-    target_include_directories(cv_image_effects PUBLIC ${INCLUDE_DIR})
-    target_link_libraries(cv_image_effects ${OpenCV_LIBS})
-    target_compile_options(cv_image_effects PRIVATE -Wall -Wextra -Wpedantic)
-else()
-    message(WARNING "OpenCV not found - Skipping OpenCV exercises (cv_extract_channel, cv_image_effects)")
+# Force default Release build for faster encoding when using plain 'make'
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE "Release" CACHE STRING "Build type" FORCE)
 endif()
 
-# Golomb main program
-add_executable(golomb_main
-        src/golomb_main.cpp
-        src/golomb.cpp
-)
+# Optional OpenCV exercises
+find_package(OpenCV QUIET COMPONENTS core imgproc imgcodecs)
+if(OpenCV_FOUND)
+  message(STATUS "OpenCV found - building OpenCV exercises")
+  add_executable(cv_extract_channel src/cv_extract_channel.cpp)
+  target_include_directories(cv_extract_channel PRIVATE ${INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(cv_extract_channel PRIVATE ${OpenCV_LIBS})
+  target_compile_options(cv_extract_channel PRIVATE ${COMMON_WARNING_FLAGS})
 
-# Add other executables here (non-OpenCV dependent)
-# Example:
-# add_executable(other_program src/other_program.cpp)
-# target_compile_options(other_program PRIVATE -Wall -Wextra -Wpedantic)
+  add_executable(cv_image_effects
+    src/cv_image_effects.cpp
+    src/effects/negative.cpp
+    src/effects/mirror.cpp
+    src/effects/rotate.cpp
+    src/effects/brightness.cpp
+  )
+  target_include_directories(cv_image_effects PRIVATE ${INCLUDE_DIR} ${OpenCV_INCLUDE_DIRS})
+  target_link_libraries(cv_image_effects PRIVATE ${OpenCV_LIBS})
+  target_compile_options(cv_image_effects PRIVATE ${COMMON_WARNING_FLAGS})
+else()
+  message(WARNING "OpenCV not found - skipping OpenCV exercises")
+endif()
+
+# Golomb library and CLI
+add_library(golomb STATIC src/golomb.cpp)
+target_include_directories(golomb PUBLIC ${INCLUDE_DIR})
+target_compile_options(golomb PRIVATE ${COMMON_WARNING_FLAGS})
+
+add_executable(golomb_main src/golomb_main.cpp)
+target_include_directories(golomb_main PRIVATE ${INCLUDE_DIR})
+target_link_libraries(golomb_main PRIVATE golomb)
+target_compile_options(golomb_main PRIVATE ${COMMON_WARNING_FLAGS})
+
+# Lossless audio codec (requires SndFile)
+find_package(SndFile REQUIRED)
+add_executable(lossless_codec src/lossless_codec_main.cpp src/lossless_codec.cpp)
+target_include_directories(lossless_codec PRIVATE ${INCLUDE_DIR})
+target_link_libraries(lossless_codec PRIVATE SndFile::sndfile golomb)
+target_compile_options(lossless_codec PRIVATE ${COMMON_WARNING_FLAGS})
