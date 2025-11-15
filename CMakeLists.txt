@@ -48,9 +48,17 @@ target_include_directories(golomb_main PRIVATE ${INCLUDE_DIR})
 target_link_libraries(golomb_main PRIVATE golomb)
 target_compile_options(golomb_main PRIVATE ${COMMON_WARNING_FLAGS})
 
-# Lossless audio codec (requires SndFile)
+# Add bit_stream library from P/01
+set(BIT_STREAM_DIR "${CMAKE_SOURCE_DIR}/../01/bit_stream/src")
+add_library(bit_stream STATIC
+  ${BIT_STREAM_DIR}/bit_stream.cpp
+  ${BIT_STREAM_DIR}/byte_stream.cpp
+)
+target_include_directories(bit_stream PUBLIC ${BIT_STREAM_DIR})
+
+# Lossless audio codec (requires SndFile + bit_stream)
 find_package(SndFile REQUIRED)
 add_executable(lossless_codec src/lossless_codec_main.cpp src/lossless_codec.cpp)
-target_include_directories(lossless_codec PRIVATE ${INCLUDE_DIR})
-target_link_libraries(lossless_codec PRIVATE SndFile::sndfile golomb)
+target_include_directories(lossless_codec PRIVATE ${INCLUDE_DIR} ${BIT_STREAM_DIR})
+target_link_libraries(lossless_codec PRIVATE SndFile::sndfile golomb bit_stream)
 target_compile_options(lossless_codec PRIVATE ${COMMON_WARNING_FLAGS})
