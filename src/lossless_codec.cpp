@@ -116,7 +116,7 @@ bool encodeWavWithGolomb(const std::string& inWav, const std::string& outFile, u
     while ((readFrames = sf_readf_short(in, buffer.data(), blockSamples)) > 0) {
         ++blockIndex;
 
-        // For stereo: convert to Mid/Side
+        // For stereo: convert to Mid/Side (LOSSLESS VERSION)
         std::vector<int16_t> encodingChannels;
         if (sfinfo.channels == 2) {
             encodingChannels.reserve(readFrames * 2);
@@ -124,8 +124,9 @@ bool encodeWavWithGolomb(const std::string& inWav, const std::string& outFile, u
                 int16_t left = buffer[i * 2];
                 int16_t right = buffer[i * 2 + 1];
                 
-                int16_t mid = (static_cast<int32_t>(left) + right) / 2;
+                // LOSSLESS Mid/Side transform (matches decoder exactly)
                 int16_t side = left - right;
+                int16_t mid = right + (side >> 1);  // mid = (L+R)/2 rounded toward right
                 
                 encodingChannels.push_back(mid);
                 encodingChannels.push_back(side);
@@ -352,14 +353,15 @@ bool decodeGolombToWav(const std::string& inFile, const std::string& outWav, boo
             history[ch][0] = sample;
         }
 
-        // Convert Mid/Side → L/R for stereo
+        // Convert Mid/Side → L/R for stereo (LOSSLESS VERSION)
         if (channels == 2) {
             for (size_t i = 0; i < decodedSamples.size(); i += 2) {
                 int16_t mid = decodedSamples[i];
                 int16_t side = decodedSamples[i + 1];
                 
-                int16_t left = mid + (side >> 1) + (side & 1);
+                // LOSSLESS inverse transform (matches encoder exactly)
                 int16_t right = mid - (side >> 1);
+                int16_t left = right + side;
                 
                 outBuffer.push_back(left);
                 outBuffer.push_back(right);
