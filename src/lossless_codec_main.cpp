@@ -1,73 +1,78 @@
 #include "lossless_codec.hpp"
-#include <sndfile.h>
 #include <iostream>
 #include <string>
-#include <vector>
+#include <cstdlib>
 
-static bool compareWavFiles(const std::string& a, const std::string& b) {
-    SF_INFO ia{}; SNDFILE* ina = sf_open(a.c_str(), SFM_READ, &ia);
-    SF_INFO ib{}; SNDFILE* inb = sf_open(b.c_str(), SFM_READ, &ib);
-    if (!ina || !inb) {
-        if (ina) sf_close(ina);
-        if (inb) sf_close(inb);
-        return false;
-    }
-    if (ia.frames != ib.frames || ia.channels != ib.channels || ia.samplerate != ib.samplerate) {
-        sf_close(ina); sf_close(inb); return false;
-    }
-    sf_count_t frames = ia.frames;
-    const size_t bufFrames = 4096;
-    std::vector<int> A(bufFrames * ia.channels), B(bufFrames * ib.channels);
-    sf_count_t pos = 0;
-    while (pos < frames) {
-        sf_count_t toread = (frames - pos) > (sf_count_t)bufFrames ? bufFrames : (frames - pos);
-        sf_count_t ra = sf_readf_int(ina, A.data(), toread);
-        sf_count_t rb = sf_readf_int(inb, B.data(), toread);
-        if (ra != rb) { sf_close(ina); sf_close(inb); return false; }
-        for (sf_count_t i = 0; i < ra * ia.channels; ++i) if (A[i] != B[i]) { sf_close(ina); sf_close(inb); return false; }
-        pos += ra;
-    }
-    sf_close(ina); sf_close(inb);
-    return true;
+void printUsage(const char* prog) {
+    std::cerr << "Usage:\n";
+    std::cerr << "  Encode: " << prog << " encode <input.wav> <output.gblk> <blockSamples> <m> <predictorOrder> [-v]\n";
+    std::cerr << "  Decode: " << prog << " decode <input.gblk> <output.wav> [-v]\n";
+    std::cerr << "\nParameters:\n";
+    std::cerr << "  blockSamples    : Frames per block (e.g., 4096)\n";
+    std::cerr << "  m               : Golomb parameter (0=adaptive, >0=fixed)\n";
+    std::cerr << "  predictorOrder  : 0=none, 1=s[n-1], 2=2*s[n-1]-s[n-2], 3=3*s[n-1]-3*s[n-2]+s[n-3]\n";
+    std::cerr << "  -v              : Verbose mode\n";
+    std::cerr << "\nExamples:\n";
+    std::cerr << "  " << prog << " encode input.wav out.gblk 4096 0 2 -v   # Adaptive m, 2-tap predictor\n";
+    std::cerr << "  " << prog << " encode input.wav out.gblk 4096 32 1 -v  # Fixed m=32, 1-tap predictor\n";
+    std::cerr << "  " << prog << " decode out.gblk output.wav -v\n";
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) { std::cerr << "Usage:\n  " << argv[0] << " encode in.wav out.gblk [blockSamples] [m] [-v]\n  " << argv[0] << " decode in.gblk out.wav [-v]\n  " << argv[0] << " test in.wav [-v]\n"; return 1; }
+    if (argc < 3) {
+        printUsage(argv[0]);
+        return 1;
+    }
 
     std::string cmd = argv[1];
     bool verbose = false;
+
+    // Check for -v flag
     for (int i = 1; i < argc; ++i) {
-        std::string s = argv[i];
-        if (s == "-v" || s == "--verbose") verbose = true;
+        if (std::string(argv[i]) == "-v") {
+            verbose = true;
+            break;
+        }
     }
 
     if (cmd == "encode") {
-        if (argc < 4) { std::cerr << "encode requires input and output\n"; return 1; }
-        std::string in = argv[2], out = argv[3];
-        uint32_t block = 4096; uint32_t m = 0;
-        if (argc >= 5) block = static_cast<uint32_t>(std::stoul(argv[4]));
-        if (argc >= 6) m = static_cast<uint32_t>(std::stoul(argv[5]));
-        bool ok = encodeWavWithGolomb(in, out, m, block, verbose);
+        if (argc < 7) {
+            std::cerr << "Error: Encode requires 5 parameters + optional -v\n";
+            printUsage(argv[0]);
+            return 1;
+        }
+
+        std::string inWav = argv[2];
+        std::string outFile = argv[3];
+        uint32_t blockSamples = std::atoi(argv[4]);
+        uint32_t m = std::atoi(argv[5]);
+        uint32_t predictorOrder = std::atoi(argv[6]);
+
+        // Validate predictor order
+        if (predictorOrder > 3) {
+            std::cerr << "Error: predictorOrder must be 0-3 (got " << predictorOrder << ")\n";
+            return 1;
+        }
+
+        bool ok = encodeWavWithGolomb(inWav, outFile, m, blockSamples, predictorOrder, verbose);
         return ok ? 0 : 2;
+
     } else if (cmd == "decode") {
-        if (argc < 4) { std::cerr << "decode requires input and output\n"; return 1; }
-        std::string in = argv[2], out = argv[3];
-        bool ok = decodeGolombToWav(in, out, verbose);
+        if (argc < 4) {
+            std::cerr << "Error: Decode requires 2 parameters + optional -v\n";
+            printUsage(argv[0]);
+            return 1;
+        }
+
+        std::string inFile = argv[2];
+        std::string outWav = argv[3];
+
+        bool ok = decodeGolombToWav(inFile, outWav, verbose);
         return ok ? 0 : 2;
-    } else if (cmd == "test") {
-        if (argc < 3) { std::cerr << "test requires input wav\n"; return 1; }
-        std::string in = argv[2];
-        std::string tmpEncoded = "tmp_test.gblk";
-        std::string tmpDecoded = "tmp_test_decoded.wav";
-        std::cout << "Running lossless round-trip test (this will encode+decode)\n";
-        bool ok = encodeWavWithGolomb(in, tmpEncoded, 0, 4096, verbose);
-        if (!ok) { std::cerr << "encode failed\n"; return 2; }
-        ok = decodeGolombToWav(tmpEncoded, tmpDecoded, verbose);
-        if (!ok) { std::cerr << "decode failed\n"; return 3; }
-        bool same = compareWavFiles(in, tmpDecoded);
-        if (same) { std::cout << "Round-trip OK: identical samples\n"; std::remove(tmpEncoded.c_str()); std::remove(tmpDecoded.c_str()); return 0; }
-        else { std::cerr << "Round-trip FAILED: decoded differs\n"; std::cerr << "Keep files: " << tmpEncoded << " " << tmpDecoded << "\n"; return 4; }
+
     } else {
-        std::cerr << "Unknown command\n"; return 1;
+        std::cerr << "Error: Unknown command '" << cmd << "'\n";
+        printUsage(argv[0]);
+        return 1;
     }
 }

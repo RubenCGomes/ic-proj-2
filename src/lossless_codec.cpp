@@ -24,7 +24,41 @@ static void showProgressBar(double fraction, uint64_t processed, uint64_t total,
     std::cout << " (" << processed << "/" << total << " samples)" << std::flush;
 }
 
-bool encodeWavWithGolomb(const std::string& inWav, const std::string& outFile, uint32_t m, uint32_t blockSamples, bool verbose) {
+// Predictor function: computes prediction based on order
+static int32_t computePrediction(uint32_t order, const std::vector<int16_t>& history) {
+    // history[0] = s[n-1], history[1] = s[n-2], history[2] = s[n-3]
+    int32_t pred = 0;
+    
+    switch (order) {
+        case 0:
+            // No prediction
+            pred = 0;
+            break;
+        case 1:
+            // 1-tap: pred = s[n-1]
+            pred = history[0];
+            break;
+        case 2:
+            // 2-tap: pred = 2*s[n-1] - s[n-2]
+            pred = 2 * static_cast<int32_t>(history[0]) - static_cast<int32_t>(history[1]);
+            break;
+        case 3:
+            // 3-tap: pred = 3*s[n-1] - 3*s[n-2] + s[n-3]
+            pred = 3 * static_cast<int32_t>(history[0]) 
+                 - 3 * static_cast<int32_t>(history[1]) 
+                 + static_cast<int32_t>(history[2]);
+            break;
+        default:
+            pred = 0;
+            break;
+    }
+    
+    // Clamp to valid 16-bit range
+    return std::max<int32_t>(-32768, std::min<int32_t>(32767, pred));
+}
+
+bool encodeWavWithGolomb(const std::string& inWav, const std::string& outFile, uint32_t m, 
+                         uint32_t blockSamples, uint32_t predictorOrder, bool verbose) {
     SF_INFO sfinfo{};
     SNDFILE* in = sf_open(inWav.c_str(), SFM_READ, &sfinfo);
     if (!in) {
@@ -46,17 +80,31 @@ bool encodeWavWithGolomb(const std::string& inWav, const std::string& outFile, u
         std::cout << "Sample rate: " << sfinfo.samplerate << ", channels: " << sfinfo.channels
                   << ", frames: " << sfinfo.frames << "\n";
         std::cout << "Block samples: " << blockSamples << ", initial m: " << (m == 0 ? "adaptive" : std::to_string(m)) << "\n";
+        std::cout << "Predictor order: " << predictorOrder;
+        switch (predictorOrder) {
+            case 0: std::cout << " (none)\n"; break;
+            case 1: std::cout << " (1-tap: s[n-1])\n"; break;
+            case 2: std::cout << " (2-tap: 2*s[n-1]-s[n-2])\n"; break;
+            case 3: std::cout << " (3-tap: 3*s[n-1]-3*s[n-2]+s[n-3])\n"; break;
+        }
+        if (sfinfo.channels == 2) {
+            std::cout << "Using Mid/Side stereo coding\n";
+        }
     }
 
-    // Write file header (add blockSamples so decoder knows block size!)
+    // Write file header (add predictor order!)
     bs.write_n_bits(sfinfo.samplerate, 32);
     bs.write_n_bits(sfinfo.channels, 16);
     bs.write_n_bits(sfinfo.frames, 64);
-    bs.write_n_bits(blockSamples, 32);  // NEW: write block size
+    bs.write_n_bits(blockSamples, 32);
+    bs.write_n_bits(predictorOrder, 8);  // NEW: store predictor order
 
     std::vector<short> buffer(blockSamples * sfinfo.channels);
-    std::vector<int16_t> prev1(sfinfo.channels, 0);
-    std::vector<int16_t> prev2(sfinfo.channels, 0);
+    
+    int numEncodedChannels = (sfinfo.channels == 2) ? 2 : sfinfo.channels;
+    
+    // Predictor history: need up to 3 previous samples per channel
+    std::vector<std::vector<int16_t>> history(numEncodedChannels, std::vector<int16_t>(3, 0));
 
     sf_count_t readFrames;
     uint64_t totalSamples = static_cast<uint64_t>(sfinfo.frames) * sfinfo.channels;
@@ -68,48 +116,73 @@ bool encodeWavWithGolomb(const std::string& inWav, const std::string& outFile, u
     while ((readFrames = sf_readf_short(in, buffer.data(), blockSamples)) > 0) {
         ++blockIndex;
 
-        // Collect residuals for this block
+        // For stereo: convert to Mid/Side
+        std::vector<int16_t> encodingChannels;
+        if (sfinfo.channels == 2) {
+            encodingChannels.reserve(readFrames * 2);
+            for (sf_count_t i = 0; i < readFrames; ++i) {
+                int16_t left = buffer[i * 2];
+                int16_t right = buffer[i * 2 + 1];
+                
+                int16_t mid = (static_cast<int32_t>(left) + right) / 2;
+                int16_t side = left - right;
+                
+                encodingChannels.push_back(mid);
+                encodingChannels.push_back(side);
+            }
+        } else {
+            encodingChannels.assign(buffer.begin(), buffer.begin() + readFrames * sfinfo.channels);
+        }
+
+        // Compute residuals for this block
         std::vector<int32_t> residuals;
-        residuals.reserve(readFrames * sfinfo.channels);
+        residuals.reserve(encodingChannels.size());
 
-        for (sf_count_t i = 0; i < readFrames; ++i) {
-            for (int ch = 0; ch < sfinfo.channels; ++ch) {
-                int idx = i * sfinfo.channels + ch;
-                int16_t sample = buffer[idx];
+        for (size_t i = 0; i < static_cast<size_t>(readFrames); ++i) {
+            for (int ch = 0; ch < numEncodedChannels; ++ch) {
+                int idx = i * numEncodedChannels + ch;
+                int16_t sample = encodingChannels[idx];
 
-                int32_t pred = 2 * static_cast<int32_t>(prev1[ch]) - static_cast<int32_t>(prev2[ch]);
-                pred = std::max<int32_t>(-32768, std::min<int32_t>(32767, pred));
+                // Compute prediction using selected predictor order
+                int32_t pred = computePrediction(predictorOrder, history[ch]);
 
                 int32_t resid = static_cast<int32_t>(sample) - pred;
                 residuals.push_back(resid);
 
-                prev2[ch] = prev1[ch];
-                prev1[ch] = sample;
+                // Update history: shift left and add new sample
+                history[ch][2] = history[ch][1];  // s[n-3] ← s[n-2]
+                history[ch][1] = history[ch][0];  // s[n-2] ← s[n-1]
+                history[ch][0] = sample;           // s[n-1] ← s[n]
             }
         }
 
-        // Adaptive m
+        // Compute optimal m for this block (adaptive)
         uint32_t blockM = m;
         if (m == 0) {
+            // Compute mean absolute residual
             double sumAbs = 0.0;
             for (auto r : residuals) sumAbs += std::abs(r);
             double meanAbs = residuals.empty() ? 1.0 : sumAbs / residuals.size();
-            blockM = std::max<uint32_t>(1, static_cast<uint32_t>(std::round(0.95 * meanAbs)));
-            blockM = std::max<uint32_t>(1, std::min<uint32_t>(256, blockM));
+            
+            // Theoretically optimal m for geometric distribution (Golomb 1966)
+            // α = mean / (mean + 1)
+            // m = ceil(-1 / log₂(α))
+            double alpha = meanAbs / (meanAbs + 1.0);
+            blockM = std::ceil(-1.0 / std::log2(alpha));
         }
 
         uint32_t b = static_cast<uint32_t>(std::ceil(std::log2(static_cast<double>(blockM))));
         uint32_t cutoff = (1u << b) - blockM;
 
-        // Write per-block header: m + number of samples in this block
+        // Write block header
         bs.write_n_bits(blockM, 16);
-        bs.write_n_bits(static_cast<uint32_t>(residuals.size()), 32);  // NEW: write sample count for this block
+        bs.write_n_bits(static_cast<uint32_t>(residuals.size()), 32);
 
         if (verbose && blockIndex % 10 == 1) {
             std::cout << "\n[block " << blockIndex << "] m=" << blockM << " samples=" << residuals.size() << "\n";
         }
 
-        // Encode residuals
+        // Golomb encode residuals
         for (auto resid : residuals) {
             uint32_t mapped = (resid >= 0) ? static_cast<uint32_t>(resid) << 1u
                                           : (static_cast<uint32_t>(-resid) << 1u) - 1u;
@@ -164,16 +237,27 @@ bool decodeGolombToWav(const std::string& inFile, const std::string& outWav, boo
 
     BitStream bs(ifs, STREAM_READ);
 
-    // Read file header
+    // Read file header (including predictor order)
     uint32_t samplerate = bs.read_n_bits(32);
     uint16_t channels = bs.read_n_bits(16);
     uint64_t frames = bs.read_n_bits(64);
-    uint32_t blockSamples = bs.read_n_bits(32);  // NEW: read block size
+    uint32_t blockSamples = bs.read_n_bits(32);
+    uint32_t predictorOrder = bs.read_n_bits(8);  // NEW: read predictor order
 
     if (verbose) {
         std::cout << "Decoding: " << inFile << " -> " << outWav << "\n";
         std::cout << "Sample rate: " << samplerate << ", channels: " << channels
                   << ", frames: " << frames << ", block size: " << blockSamples << "\n";
+        std::cout << "Predictor order: " << predictorOrder;
+        switch (predictorOrder) {
+            case 0: std::cout << " (none)\n"; break;
+            case 1: std::cout << " (1-tap)\n"; break;
+            case 2: std::cout << " (2-tap)\n"; break;
+            case 3: std::cout << " (3-tap)\n"; break;
+        }
+        if (channels == 2) {
+            std::cout << "Using Mid/Side stereo decoding\n";
+        }
     }
 
     SF_INFO sfinfo{};
@@ -190,8 +274,9 @@ bool decodeGolombToWav(const std::string& inFile, const std::string& outWav, boo
 
     uint64_t totalSamples = frames * channels;
     uint64_t processedSamples = 0;
-    std::vector<int16_t> prev1(channels, 0);
-    std::vector<int16_t> prev2(channels, 0);
+    
+    int numEncodedChannels = (channels == 2) ? 2 : channels;
+    std::vector<std::vector<int16_t>> history(numEncodedChannels, std::vector<int16_t>(3, 0));
 
     const size_t bufferFrames = 4096;
     std::vector<short> outBuffer;
@@ -202,9 +287,8 @@ bool decodeGolombToWav(const std::string& inFile, const std::string& outWav, boo
     while (processedSamples < totalSamples) {
         ++blockIndex;
 
-        // Read per-block header
         uint32_t blockM = bs.read_n_bits(16);
-        uint32_t blockSampleCount = bs.read_n_bits(32);  // NEW: read sample count for this block
+        uint32_t blockSampleCount = bs.read_n_bits(32);
 
         if (blockM == 0 || blockSampleCount == 0) {
             if (verbose) std::cerr << "\nWarning: blockM or sampleCount is 0 (EOF?)\n";
@@ -218,9 +302,10 @@ bool decodeGolombToWav(const std::string& inFile, const std::string& outWav, boo
             std::cout << "\n[decode block " << blockIndex << "] m=" << blockM << " samples=" << blockSampleCount << "\n";
         }
 
-        // Decode exactly blockSampleCount samples
+        std::vector<int16_t> decodedSamples;
+        decodedSamples.reserve(blockSampleCount);
+
         for (uint32_t s = 0; s < blockSampleCount; ++s) {
-            // Read unary quotient
             uint32_t q = 0;
             int bit;
             while ((bit = bs.read_bit()) == 0) {
@@ -234,7 +319,6 @@ bool decodeGolombToWav(const std::string& inFile, const std::string& outWav, boo
             }
             if (bit == EOF) break;
 
-            // Read truncated binary remainder
             uint32_t r = 0;
             if (b > 1) {
                 r = bs.read_n_bits(b - 1);
@@ -253,22 +337,41 @@ bool decodeGolombToWav(const std::string& inFile, const std::string& outWav, boo
             int32_t resid = (mapped & 1u) ? -static_cast<int32_t>((mapped + 1) >> 1)
                                          : static_cast<int32_t>(mapped >> 1);
 
-            int ch = processedSamples % channels;
+            int ch = s % numEncodedChannels;
 
-            int32_t pred = 2 * static_cast<int32_t>(prev1[ch]) - static_cast<int32_t>(prev2[ch]);
-            pred = std::max<int32_t>(-32768, std::min<int32_t>(32767, pred));
+            // Use same predictor as encoder
+            int32_t pred = computePrediction(predictorOrder, history[ch]);
 
             int16_t sample = static_cast<int16_t>(pred + resid);
 
-            outBuffer.push_back(sample);
+            decodedSamples.push_back(sample);
 
-            prev2[ch] = prev1[ch];
-            prev1[ch] = sample;
-
-            ++processedSamples;
+            // Update history
+            history[ch][2] = history[ch][1];
+            history[ch][1] = history[ch][0];
+            history[ch][0] = sample;
         }
 
-        // Write buffer when full
+        // Convert Mid/Side → L/R for stereo
+        if (channels == 2) {
+            for (size_t i = 0; i < decodedSamples.size(); i += 2) {
+                int16_t mid = decodedSamples[i];
+                int16_t side = decodedSamples[i + 1];
+                
+                int16_t left = mid + (side >> 1) + (side & 1);
+                int16_t right = mid - (side >> 1);
+                
+                outBuffer.push_back(left);
+                outBuffer.push_back(right);
+                processedSamples += 2;
+            }
+        } else {
+            for (auto sample : decodedSamples) {
+                outBuffer.push_back(sample);
+                ++processedSamples;
+            }
+        }
+
         if (outBuffer.size() >= bufferFrames * channels) {
             sf_count_t written = sf_writef_short(out, outBuffer.data(), outBuffer.size() / channels);
             if (written != static_cast<sf_count_t>(outBuffer.size() / channels)) {
