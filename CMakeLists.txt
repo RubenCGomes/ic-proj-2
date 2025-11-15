@@ -62,3 +62,13 @@ add_executable(lossless_audio src/lossless_audio_main.cpp src/lossless_audio.cpp
 target_include_directories(lossless_audio PRIVATE ${INCLUDE_DIR} ${BIT_STREAM_DIR})
 target_link_libraries(lossless_audio PRIVATE SndFile::sndfile golomb bit_stream)
 target_compile_options(lossless_audio PRIVATE ${COMMON_WARNING_FLAGS})
+
+# Image codec (requires Golomb + bit_stream)
+add_executable(lossless_image src/lossless_image_main.cpp src/lossless_image.cpp)
+target_include_directories(lossless_image PRIVATE ${INCLUDE_DIR} ${BIT_STREAM_DIR})
+target_link_libraries(lossless_image PRIVATE golomb bit_stream)
+target_compile_options(lossless_image PRIVATE ${COMMON_WARNING_FLAGS})
+
+# PPM color to grayscale converter
+add_executable(ppm_to_grayscale src/ppm_to_grayscale.cpp)
+target_compile_options(ppm_to_grayscale PRIVATE ${COMMON_WARNING_FLAGS})
