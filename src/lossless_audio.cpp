@@ -1,4 +1,4 @@
-#include "lossless_codec.hpp"
+#include "lossless_audio.hpp"
 #include "golomb.hpp"
 #include "bit_stream.h"
 #include <sndfile.h>

@@ -1,4 +1,4 @@
-#include "lossless_codec.hpp"
+#include "lossless_audio.hpp"
 #include <iostream>
 #include <string>
 #include <cstdlib>

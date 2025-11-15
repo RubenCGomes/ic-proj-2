@@ -1,5 +1,5 @@
-#ifndef LOSSLESS_CODEC_HPP
-#define LOSSLESS_CODEC_HPP
+#ifndef LOSSLESS_AUDIO_HPP
+#define LOSSLESS_AUDIO_HPP
 
 #include <string>
 #include <cstdint>
