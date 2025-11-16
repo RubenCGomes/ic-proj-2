@@ -8,17 +8,17 @@
 
 void printUsage(const char* progName) {
     std::cout << "Usage: " << progName << " <input_image> <output_image> <effect> [parameters]" << std::endl;
+    std::cout << "\nSupported formats: JPG, PNG, BMP, PPM, etc." << std::endl;
     std::cout << "\nAvailable effects:" << std::endl;
     std::cout << "  negative              - Creates negative version of image" << std::endl;
-    std::cout << "  mirror-h              - Mirrors image horizontally" << std::endl;
-    std::cout << "  mirror-v              - Mirrors image vertically" << std::endl;
+    std::cout << "  mirror <h|v>          - Mirrors image horizontally or verically" << std::endl;
     std::cout << "  rotate <n>            - Rotates image by n*90 degrees (e.g., 1=90°, 2=180°, 3=270°)" << std::endl;
     std::cout << "  brightness <delta>    - Adjusts brightness (positive=lighter, negative=darker)" << std::endl;
     std::cout << "\nExamples:" << std::endl;
-    std::cout << "  " << progName << " input.jpg output.jpg negative" << std::endl;
+    std::cout << "  " << progName << " input.ppm output.ppm negative" << std::endl;
     std::cout << "  " << progName << " input.jpg output.jpg mirror-h" << std::endl;
     std::cout << "  " << progName << " input.jpg output.jpg rotate 2" << std::endl;
-    std::cout << "  " << progName << " input.jpg output.jpg brightness 50" << std::endl;
+    std::cout << "  " << progName << " input.ppm output.ppm brightness 50" << std::endl;
 }
 
 int main(int argc, char** argv) {
@@ -32,11 +32,12 @@ int main(int argc, char** argv) {
     std::string outputFile = argv[2];
     std::string effect = argv[3];
 
-    // Read the input image
+    // Read the input image (supports PPM, JPG, PNG, BMP, etc.)
     cv::Mat src = cv::imread(inputFile, cv::IMREAD_COLOR);
 
     if (src.empty()) {
         std::cerr << "Error: Could not read image from " << inputFile << std::endl;
+        std::cerr << "Supported formats: JPG, PNG, BMP, PPM, etc." << std::endl;
         return -1;
     }
 
@@ -47,13 +48,24 @@ int main(int argc, char** argv) {
         result = createNegative(src);
         std::cout << "Applied negative effect" << std::endl;
     }
-    else if (effect == "mirror-h") {
-        result = mirrorHorizontal(src);
-        std::cout << "Applied horizontal mirror effect" << std::endl;
-    }
-    else if (effect == "mirror-v") {
-        result = mirrorVertical(src);
-        std::cout << "Applied vertical mirror effect" << std::endl;
+    else if (effect == "mirror") {
+        if (argc < 5) {
+            std::cerr << "Error: mirror effect requires direction parameter (h or v)" << std::endl;
+            std::cout << "Usage: " << argv[0] << " <input> <output> mirror <h|v>" << std::endl;
+            return -1;
+        }
+        std::string direction = argv[4];
+        if (direction == "h") {
+            result = mirrorHorizontal(src);
+        }
+        else if (direction == "v") {
+            result = mirrorVertical(src);
+        }
+        else {
+            std::cerr << "Error: Invalid mirror direction '" << direction << "'. Use 'h' or 'v'." << std::endl;
+            return -1;
+        }
+        std::cout << "Applied " << (direction == "h" ? "horizontal" : "vertical") << " mirror effect" << std::endl;
     }
     else if (effect == "rotate") {
         if (argc < 5) {
@@ -81,8 +93,20 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    // Write the output image
-    if (!cv::imwrite(outputFile, result)) {
+    // Prepare output image for writing
+    cv::Mat outputImage;
+    std::string extension = outputFile.substr(outputFile.find_last_of(".") + 1);
+
+    // Check if result is grayscale and output is PPM
+    if ((extension == "ppm" || extension == "PPM") && result.channels() == 1) {
+        // PPM format requires 3-channel BGR image
+        cv::cvtColor(result, outputImage, cv::COLOR_GRAY2BGR);
+    } else {
+        outputImage = result;
+    }
+
+    // Write the output image (format determined by file extension)
+    if (!cv::imwrite(outputFile, outputImage)) {
         std::cerr << "Error: Could not write image to " << outputFile << std::endl;
         return -1;
     }

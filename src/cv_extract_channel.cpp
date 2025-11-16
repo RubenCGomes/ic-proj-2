@@ -25,7 +25,9 @@ int main(int argc, char** argv) {
     if (argc != 4) {
         std::cout << "Usage: " << argv[0] << " <input_image> <output_image> <channel>" << std::endl;
         std::cout << "  channel: 0=Blue, 1=Green, 2=Red" << std::endl;
-        std::cout << "Example: " << argv[0] << " input.jpg output.jpg 2" << std::endl;
+        std::cout << "Supported formats: JPG, PNG, BMP, PPM, PGM, etc." << std::endl;
+        std::cout << "Example: " << argv[0] << " input.ppm output.ppm 2" << std::endl;
+        std::cout << "Example: " << argv[0] << " input.jpg output.jpg 1" << std::endl;
         return -1;
     }
 
@@ -33,11 +35,12 @@ int main(int argc, char** argv) {
     std::string outputFile = argv[2];
     int channel = std::stoi(argv[3]);
 
-    // Read the input image
+    // Read the input image (supports PPM, JPG, PNG, BMP, etc.)
     cv::Mat src = cv::imread(inputFile, cv::IMREAD_COLOR);
 
     if (src.empty()) {
         std::cerr << "Error: Could not read image from " << inputFile << std::endl;
+        std::cerr << "Supported formats: JPG, PNG, BMP, PPM, PGM, etc." << std::endl;
         return -1;
     }
 
@@ -50,8 +53,21 @@ int main(int argc, char** argv) {
     // Extract channel pixel by pixel
     cv::Mat result = extractChannel(src, channel);
 
-    // Write the output image
-    if (!cv::imwrite(outputFile, result)) {
+    // Check if output format is PPM - if so, convert grayscale to BGR
+    cv::Mat outputImage;
+    std::string extension = outputFile.substr(outputFile.find_last_of(".") + 1);
+
+    if (extension == "ppm" || extension == "PPM") {
+        // PPM format requires 3-channel BGR image
+        // Convert single channel to 3-channel by replicating the grayscale values
+        cv::cvtColor(result, outputImage, cv::COLOR_GRAY2BGR);
+    } else {
+        // For other formats (jpg, png, pgm, etc.), use the single channel image
+        outputImage = result;
+    }
+
+    // Write the output image (format determined by file extension)
+    if (!cv::imwrite(outputFile, outputImage)) {
         std::cerr << "Error: Could not write image to " << outputFile << std::endl;
         return -1;
     }
