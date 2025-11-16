@@ -203,23 +203,21 @@ bool encodeImage(const std::string& inputImage,
         // Compute adaptive m if needed
         uint32_t blockM = m;
         if (m == 0) {
-            std::vector<uint32_t> absResiduals;
-            absResiduals.reserve(residuals.size());
+            // Compute mean absolute residual (same as audio codec)
+            double sumAbs = 0.0;
             for (auto r : residuals) {
-                absResiduals.push_back(static_cast<uint32_t>(std::abs(r)));
+                sumAbs += std::abs(r);
             }
-            std::nth_element(absResiduals.begin(),
-                           absResiduals.begin() + absResiduals.size() / 2,
-                           absResiduals.end());
+            double meanAbs = residuals.empty() ? 1.0 : sumAbs / residuals.size();
             
-            double median = static_cast<double>(absResiduals[absResiduals.size() / 2]);
-            blockM = std::max<uint32_t>(1, static_cast<uint32_t>(std::round(0.69 * median)));
-            blockM = std::max<uint32_t>(1, std::min<uint32_t>(32, blockM));
+            // Theoretically optimal m for geometric distribution (Golomb 1966)
+            // α = mean / (mean + 1)
+            // m = ceil(-1 / log₂(α))
+            double alpha = meanAbs / (meanAbs + 1.0);
+            blockM = static_cast<uint32_t>(std::ceil(-1.0 / std::log2(alpha)));
             
-            if (blockM > 1) {
-                uint32_t k = static_cast<uint32_t>(std::round(std::log2(static_cast<double>(blockM))));
-                blockM = 1u << k;
-            }
+            // Clamp to reasonable range (optional - prevents extreme values)
+            blockM = std::max<uint32_t>(1, std::min<uint32_t>(256, blockM));
             
             // Safety check
             if (blockM == 0) blockM = 1;
