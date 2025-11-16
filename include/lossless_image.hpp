@@ -30,6 +30,7 @@ enum class ImagePredictor {
  * @param m Golomb parameter (0 = adaptive, >0 = fixed)
  * @param blockSize Block size for adaptive m (0 = per-row adaptation)
  * @param verbose Print progress and statistics
+ * @param autoSelectPredictor Automatically select predictor based on image content
  * @return true on success
  */
 bool encodeImage(const std::string& inputImage,
@@ -37,7 +38,8 @@ bool encodeImage(const std::string& inputImage,
                  ImagePredictor predictor,
                  uint32_t m,
                  uint32_t blockSize,
-                 bool verbose);
+                 bool verbose,
+                 bool autoSelectPredictor = false);
 
 /**
  * @brief Decode a compressed image back to PPM

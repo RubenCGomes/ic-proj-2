@@ -108,12 +108,92 @@ static int32_t predict(ImagePredictor predictor, uint8_t left, uint8_t up, uint8
     }
 }
 
+/**
+ * @brief Try all predictors and return the one with best compression
+ * 
+ * @param inputImage Input PPM file
+ * @param tempDir Directory for temporary files
+ * @param m Golomb parameter
+ * @param blockSize Block size for adaptive m
+ * @param verbose Print progress
+ * @return Best predictor type
+ */
+static ImagePredictor findBestPredictor(const std::string& inputImage,
+                                        const std::string& tempDir,
+                                        uint32_t m,
+                                        uint32_t blockSize,
+                                        bool verbose) {
+    if (verbose) {
+        std::cout << "\n=== Testing all predictors to find best compression ===\n";
+    }
+    
+    ImagePredictor bestPredictor = ImagePredictor::JPEG_LS;
+    size_t bestSize = SIZE_MAX;
+    
+    // Test all predictors (0-8)
+    for (int p = 0; p <= 8; ++p) {
+        ImagePredictor predictor = static_cast<ImagePredictor>(p);
+        std::string tempFile = tempDir + "/temp_p" + std::to_string(p) + ".gimg";
+        
+        // Encode with this predictor (silent mode)
+        bool ok = encodeImage(inputImage, tempFile, predictor, m, blockSize, false);
+        
+        if (ok) {
+            // Check compressed file size
+            std::ifstream check(tempFile, std::ios::binary | std::ios::ate);
+            size_t compressedSize = check.tellg();
+            check.close();
+            
+            if (verbose) {
+                const char* names[] = {"NONE", "LEFT", "UP", "UP_LEFT", "a+b-c", 
+                                      "a+(b-c)/2", "b+(a-c)/2", "(a+b)/2", "JPEG-LS"};
+                std::cout << "  Predictor " << p << " (" << names[p] << "): " 
+                          << compressedSize << " bytes";
+                if (compressedSize < bestSize) {
+                    std::cout << " ← NEW BEST!";
+                }
+                std::cout << "\n";
+            }
+            
+            if (compressedSize < bestSize) {
+                bestSize = compressedSize;
+                bestPredictor = predictor;
+            }
+            
+            // Delete temp file
+            std::remove(tempFile.c_str());
+        }
+    }
+    
+    if (verbose) {
+        const char* names[] = {"NONE", "LEFT", "UP", "UP_LEFT", "a+b-c", 
+                              "a+(b-c)/2", "b+(a-c)/2", "(a+b)/2", "JPEG-LS"};
+        std::cout << "\nBest predictor: " << static_cast<int>(bestPredictor) 
+                  << " (" << names[static_cast<int>(bestPredictor)] << ")\n";
+        std::cout << "Best size: " << bestSize << " bytes\n\n";
+    }
+    
+    return bestPredictor;
+}
+
 bool encodeImage(const std::string& inputImage,
                  const std::string& outputFile,
                  ImagePredictor predictor,
                  uint32_t m,
                  uint32_t blockSize,
-                 bool verbose) {
+                 bool verbose,
+                 bool autoSelectPredictor) {  // NO default value here!
+    
+    // Auto-select best predictor if requested
+    if (autoSelectPredictor) {
+        std::string tempDir = ".";
+        size_t lastSlash = outputFile.find_last_of("/\\");
+        if (lastSlash != std::string::npos) {
+            tempDir = outputFile.substr(0, lastSlash);
+        }
+        
+        predictor = findBestPredictor(inputImage, tempDir, m, blockSize, verbose);
+    }
     
     // Read PPM P5
     std::ifstream ifs(inputImage, std::ios::binary);
