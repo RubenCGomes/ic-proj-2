@@ -1,19 +1,24 @@
-#ifndef IMAGE_CODEC_HPP
-#define IMAGE_CODEC_HPP
+#ifndef LOSSLESS_IMAGE_HPP
+#define LOSSLESS_IMAGE_HPP
 
 #include <string>
 #include <cstdint>
 
 /**
  * @brief Predictor types for image compression
+ * Based on JPEG lossless mode (ISO/IEC 10918-1) - 7 linear predictors
+ * Plus JPEG-LS nonlinear predictor
  */
 enum class ImagePredictor {
-    NONE = 0,        // No prediction (raw pixels)
-    LEFT = 1,        // pred = pixel[x-1, y]
-    UP = 2,          // pred = pixel[x, y-1]
-    AVERAGE = 3,     // pred = (pixel[x-1,y] + pixel[x,y-1]) / 2
-    PAETH = 4,       // pred = Paeth predictor (PNG standard)
-    JPEG_LS = 5      // pred = JPEG-LS predictor (best for natural images)
+    NONE = 0,        // No prediction (for testing)
+    LEFT = 1,        // Mode 1: a (left pixel)
+    UP = 2,          // Mode 2: b (upper pixel)  
+    UP_LEFT = 3,     // Mode 3: c (upper-left pixel)
+    LEFT_UP_DIFF = 4,// Mode 4: a + b - c (Paeth-like)
+    LEFT_AVG = 5,    // Mode 5: a + (b - c)/2
+    UP_AVG = 6,      // Mode 6: b + (a - c)/2
+    AVG = 7,         // Mode 7: (a + b)/2
+    JPEG_LS = 8      // JPEG-LS nonlinear predictor (best for natural images)
 };
 
 /**
@@ -21,7 +26,7 @@ enum class ImagePredictor {
  * 
  * @param inputImage Input image file (PPM P5 format - grayscale)
  * @param outputFile Output compressed file (.gimg)
- * @param predictor Predictor type to use
+ * @param predictor Predictor type to use (0-8)
  * @param m Golomb parameter (0 = adaptive, >0 = fixed)
  * @param blockSize Block size for adaptive m (0 = per-row adaptation)
  * @param verbose Print progress and statistics

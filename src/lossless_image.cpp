@@ -47,50 +47,59 @@ static uint8_t jpegLSPredictor(uint8_t a, uint8_t b, uint8_t c) {
     return static_cast<uint8_t>(a + b - c);
 }
 
-// Compute prediction
+// Compute prediction using JPEG lossless modes 1-7 + JPEG-LS
 static int32_t predict(ImagePredictor predictor, uint8_t left, uint8_t up, uint8_t upLeft) {
+    int32_t a = static_cast<int32_t>(left);     // pixel to the left
+    int32_t b = static_cast<int32_t>(up);       // pixel above
+    int32_t c = static_cast<int32_t>(upLeft);   // pixel upper-left diagonal
+    
     switch (predictor) {
         case ImagePredictor::NONE:
+            // No prediction (baseline for testing)
             return 0;
             
         case ImagePredictor::LEFT:
-            return static_cast<int32_t>(left);
+            // Mode 1: a (left pixel)
+            return a;
             
         case ImagePredictor::UP:
-            return static_cast<int32_t>(up);
+            // Mode 2: b (upper pixel)
+            return b;
             
-        case ImagePredictor::AVERAGE:
-            return (static_cast<int32_t>(left) + static_cast<int32_t>(up)) / 2;
+        case ImagePredictor::UP_LEFT:
+            // Mode 3: c (upper-left diagonal pixel)
+            return c;
             
-        case ImagePredictor::PAETH: {
-            int32_t p = static_cast<int32_t>(left) + static_cast<int32_t>(up) - static_cast<int32_t>(upLeft);
-            int32_t pa = std::abs(p - left);
-            int32_t pb = std::abs(p - up);
-            int32_t pc = std::abs(p - upLeft);
+        case ImagePredictor::LEFT_UP_DIFF:
+            // Mode 4: a + b - c (Paeth-like predictor)
+            return a + b - c;
             
-            if (pa <= pb && pa <= pc) return static_cast<int32_t>(left);
-            if (pb <= pc) return static_cast<int32_t>(up);
-            return static_cast<int32_t>(upLeft);
-        }
+        case ImagePredictor::LEFT_AVG:
+            // Mode 5: a + (b - c)/2
+            return a + ((b - c) / 2);
+            
+        case ImagePredictor::UP_AVG:
+            // Mode 6: b + (a - c)/2
+            return b + ((a - c) / 2);
+            
+        case ImagePredictor::AVG:
+            // Mode 7: (a + b)/2
+            return (a + b) / 2;
             
         case ImagePredictor::JPEG_LS: {
-            // Safe JPEG-LS with edge handling
-            int32_t a = static_cast<int32_t>(left);
-            int32_t b = static_cast<int32_t>(up);
-            int32_t c = static_cast<int32_t>(upLeft);
-            
-            // At edges, use simple predictors to avoid extreme values
+            // JPEG-LS nonlinear predictor (equation 6.6 from PDF)
+            // Edge handling: at image boundaries, use simpler predictors
             if (a == 0 && b == 0) return 0;  // Top-left corner
-            if (a == 0) return b;             // Left edge
-            if (b == 0) return a;             // Top edge
+            if (a == 0) return b;             // Left edge (x=0)
+            if (b == 0) return a;             // Top edge (y=0)
             
-            // Standard JPEG-LS (MED predictor)
+            // Standard JPEG-LS MED (Median Edge Detection) predictor
             if (c >= std::max(a, b)) {
-                return std::min(a, b);
+                return std::min(a, b);        // min(a,b) if c >= max(a,b)
             } else if (c <= std::min(a, b)) {
-                return std::max(a, b);
+                return std::max(a, b);        // max(a,b) if c <= min(a,b)
             } else {
-                return a + b - c;
+                return a + b - c;             // a + b - c otherwise
             }
         }
             
@@ -141,12 +150,15 @@ bool encodeImage(const std::string& inputImage,
         std::cout << "Image: " << width << "x" << height << " (8-bit grayscale)\n";
         std::cout << "Predictor: ";
         switch (predictor) {
-            case ImagePredictor::NONE: std::cout << "NONE\n"; break;
-            case ImagePredictor::LEFT: std::cout << "LEFT\n"; break;
-            case ImagePredictor::UP: std::cout << "UP\n"; break;
-            case ImagePredictor::AVERAGE: std::cout << "AVERAGE\n"; break;
-            case ImagePredictor::PAETH: std::cout << "PAETH\n"; break;
-            case ImagePredictor::JPEG_LS: std::cout << "JPEG-LS\n"; break;
+            case ImagePredictor::NONE: std::cout << "0 (NONE - no prediction)\n"; break;
+            case ImagePredictor::LEFT: std::cout << "1 (LEFT: a)\n"; break;
+            case ImagePredictor::UP: std::cout << "2 (UP: b)\n"; break;
+            case ImagePredictor::UP_LEFT: std::cout << "3 (UP_LEFT: c)\n"; break;
+            case ImagePredictor::LEFT_UP_DIFF: std::cout << "4 (LEFT+UP-UPLEFT: a+b-c)\n"; break;
+            case ImagePredictor::LEFT_AVG: std::cout << "5 (LEFT_AVG: a+(b-c)/2)\n"; break;
+            case ImagePredictor::UP_AVG: std::cout << "6 (UP_AVG: b+(a-c)/2)\n"; break;
+            case ImagePredictor::AVG: std::cout << "7 (AVG: (a+b)/2)\n"; break;
+            case ImagePredictor::JPEG_LS: std::cout << "8 (JPEG-LS nonlinear)\n"; break;
         }
         std::cout << "Golomb m: " << (m == 0 ? "adaptive" : std::to_string(m)) << "\n";
         std::cout << "Block size: " << effectiveBlockSize << " pixels\n";

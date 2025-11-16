@@ -7,20 +7,23 @@ void printUsage(const char* prog) {
     std::cerr << "Usage:\n";
     std::cerr << "  Encode: " << prog << " encode <input.ppm> <output.gimg> <predictor> <m> <blockSize> [-v]\n";
     std::cerr << "  Decode: " << prog << " decode <input.gimg> <output.ppm> [-v]\n";
-    std::cerr << "\nPredictors:\n";
-    std::cerr << "  0 = NONE (no prediction)\n";
-    std::cerr << "  1 = LEFT (use left pixel)\n";
-    std::cerr << "  2 = UP (use upper pixel)\n";
-    std::cerr << "  3 = AVERAGE (avg of left and up)\n";
-    std::cerr << "  4 = PAETH (PNG predictor)\n";
-    std::cerr << "  5 = JPEG-LS (best for natural images)\n";
+    std::cerr << "\nPredictors (JPEG lossless modes 1-7 + JPEG-LS):\n";
+    std::cerr << "  0 = NONE (no prediction - baseline)\n";
+    std::cerr << "  1 = LEFT (a)\n";
+    std::cerr << "  2 = UP (b)\n";
+    std::cerr << "  3 = UP_LEFT (c)\n";
+    std::cerr << "  4 = a + b - c\n";
+    std::cerr << "  5 = a + (b - c)/2\n";
+    std::cerr << "  6 = b + (a - c)/2\n";
+    std::cerr << "  7 = (a + b)/2\n";
+    std::cerr << "  8 = JPEG-LS (nonlinear - best for natural images)\n";
     std::cerr << "\nParameters:\n";
     std::cerr << "  m          : Golomb parameter (0 = adaptive, >0 = fixed)\n";
     std::cerr << "  blockSize  : Block size for adaptive m (0 = per-row, >0 = per block)\n";
     std::cerr << "  -v         : Verbose mode\n";
     std::cerr << "\nExamples:\n";
-    std::cerr << "  " << prog << " encode images/lena.ppm lena.gimg 5 0 0 -v   # JPEG-LS, adaptive m, per-row\n";
-    std::cerr << "  " << prog << " encode images/lena.ppm lena.gimg 4 8 256 -v # PAETH, fixed m=8, 256-pixel blocks\n";
+    std::cerr << "  " << prog << " encode images/lena.ppm lena.gimg 8 0 0 -v    # JPEG-LS, adaptive m, per-row\n";
+    std::cerr << "  " << prog << " encode images/lena.ppm lena.gimg 4 8 256 -v  # Mode 4, fixed m=8, 256-pixel blocks\n";
     std::cerr << "  " << prog << " decode lena.gimg lena_decoded.ppm -v\n";
 }
 
@@ -54,8 +57,8 @@ int main(int argc, char** argv) {
         uint32_t m = std::atoi(argv[5]);
         uint32_t blockSize = std::atoi(argv[6]);
         
-        if (predictorNum > 5) {
-            std::cerr << "Error: Invalid predictor (must be 0-5)\n";
+        if (predictorNum > 8) {
+            std::cerr << "Error: Invalid predictor (must be 0-8)\n";
             return 1;
         }
         
