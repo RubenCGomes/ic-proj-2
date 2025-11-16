@@ -10,7 +10,6 @@
 #include <iomanip>
 #include <deque>
 
-// Progress bar helper
 static void showProgress(double fraction, const std::string& label, bool verbose) {
     if (!verbose) return;
     const int width = 50;
@@ -25,81 +24,68 @@ static void showProgress(double fraction, const std::string& label, bool verbose
               << (fraction * 100.0) << "%" << std::flush;
 }
 
-// Paeth predictor (PNG standard)
 static uint8_t paethPredictor(uint8_t a, uint8_t b, uint8_t c) {
-    int p = static_cast<int>(a) + b - c;
-    int pa = std::abs(p - a);
-    int pb = std::abs(p - b);
-    int pc = std::abs(p - c);
+    int32_t p = static_cast<int32_t>(a) + static_cast<int32_t>(b) - static_cast<int32_t>(c);
+    int32_t pa = std::abs(p - a);
+    int32_t pb = std::abs(p - b);
+    int32_t pc = std::abs(p - c);
     
     if (pa <= pb && pa <= pc) return a;
     if (pb <= pc) return b;
     return c;
 }
 
-// JPEG-LS predictor
 static uint8_t jpegLSPredictor(uint8_t a, uint8_t b, uint8_t c) {
-    int minAB = std::min(static_cast<int>(a), static_cast<int>(b));
-    int maxAB = std::max(static_cast<int>(a), static_cast<int>(b));
-    
-    if (c >= maxAB) return minAB;
-    if (c <= minAB) return maxAB;
-    return static_cast<uint8_t>(a + b - c);
+    if (c >= std::max(a, b)) {
+        return std::min(a, b);
+    } else if (c <= std::min(a, b)) {
+        return std::max(a, b);
+    } else {
+        return a + b - c;
+    }
 }
 
-// Compute prediction using JPEG lossless modes 1-7 + JPEG-LS
 static int32_t predict(ImagePredictor predictor, uint8_t left, uint8_t up, uint8_t upLeft) {
-    int32_t a = static_cast<int32_t>(left);     // pixel to the left
-    int32_t b = static_cast<int32_t>(up);       // pixel above
-    int32_t c = static_cast<int32_t>(upLeft);   // pixel upper-left diagonal
+    int32_t a = static_cast<int32_t>(left);
+    int32_t b = static_cast<int32_t>(up);
+    int32_t c = static_cast<int32_t>(upLeft);
     
     switch (predictor) {
         case ImagePredictor::NONE:
-            // No prediction (baseline for testing)
             return 0;
             
         case ImagePredictor::LEFT:
-            // Mode 1: a (left pixel)
             return a;
             
         case ImagePredictor::UP:
-            // Mode 2: b (upper pixel)
             return b;
             
         case ImagePredictor::UP_LEFT:
-            // Mode 3: c (upper-left diagonal pixel)
             return c;
             
         case ImagePredictor::LEFT_UP_DIFF:
-            // Mode 4: a + b - c (Paeth-like predictor)
             return a + b - c;
             
         case ImagePredictor::LEFT_AVG:
-            // Mode 5: a + (b - c)/2
             return a + ((b - c) / 2);
             
         case ImagePredictor::UP_AVG:
-            // Mode 6: b + (a - c)/2
             return b + ((a - c) / 2);
             
         case ImagePredictor::AVG:
-            // Mode 7: (a + b)/2
             return (a + b) / 2;
             
         case ImagePredictor::JPEG_LS: {
-            // JPEG-LS nonlinear predictor (equation 6.6 from PDF)
-            // Edge handling: at image boundaries, use simpler predictors
-            if (a == 0 && b == 0) return 0;  // Top-left corner
-            if (a == 0) return b;             // Left edge (x=0)
-            if (b == 0) return a;             // Top edge (y=0)
+            if (a == 0 && b == 0) return 0;
+            if (a == 0) return b;
+            if (b == 0) return a;
             
-            // Standard JPEG-LS MED (Median Edge Detection) predictor
             if (c >= std::max(a, b)) {
-                return std::min(a, b);        // min(a,b) if c >= max(a,b)
+                return std::min(a, b);
             } else if (c <= std::min(a, b)) {
-                return std::max(a, b);        // max(a,b) if c <= min(a,b)
+                return std::max(a, b);
             } else {
-                return a + b - c;             // a + b - c otherwise
+                return a + b - c;
             }
         }
             
@@ -108,16 +94,6 @@ static int32_t predict(ImagePredictor predictor, uint8_t left, uint8_t up, uint8
     }
 }
 
-/**
- * @brief Try all predictors and return the one with best compression
- * 
- * @param inputImage Input PPM file
- * @param tempDir Directory for temporary files
- * @param m Golomb parameter
- * @param blockSize Block size for adaptive m
- * @param verbose Print progress
- * @return Best predictor type
- */
 static ImagePredictor findBestPredictor(const std::string& inputImage,
                                         const std::string& tempDir,
                                         uint32_t m,
@@ -130,16 +106,13 @@ static ImagePredictor findBestPredictor(const std::string& inputImage,
     ImagePredictor bestPredictor = ImagePredictor::JPEG_LS;
     size_t bestSize = SIZE_MAX;
     
-    // Test all predictors (0-8)
     for (int p = 0; p <= 8; ++p) {
         ImagePredictor predictor = static_cast<ImagePredictor>(p);
         std::string tempFile = tempDir + "/temp_p" + std::to_string(p) + ".gimg";
         
-        // Encode with this predictor (silent mode)
         bool ok = encodeImage(inputImage, tempFile, predictor, m, blockSize, false);
         
         if (ok) {
-            // Check compressed file size
             std::ifstream check(tempFile, std::ios::binary | std::ios::ate);
             size_t compressedSize = check.tellg();
             check.close();
@@ -150,7 +123,7 @@ static ImagePredictor findBestPredictor(const std::string& inputImage,
                 std::cout << "  Predictor " << p << " (" << names[p] << "): " 
                           << compressedSize << " bytes";
                 if (compressedSize < bestSize) {
-                    std::cout << " ← NEW BEST!";
+                    std::cout << " <- NEW BEST!";
                 }
                 std::cout << "\n";
             }
@@ -160,7 +133,6 @@ static ImagePredictor findBestPredictor(const std::string& inputImage,
                 bestPredictor = predictor;
             }
             
-            // Delete temp file
             std::remove(tempFile.c_str());
         }
     }
@@ -182,9 +154,8 @@ bool encodeImage(const std::string& inputImage,
                  uint32_t m,
                  uint32_t blockSize,
                  bool verbose,
-                 bool autoSelectPredictor) {  // NO default value here!
+                 bool autoSelectPredictor) {
     
-    // Auto-select best predictor if requested
     if (autoSelectPredictor) {
         std::string tempDir = ".";
         size_t lastSlash = outputFile.find_last_of("/\\");
@@ -195,7 +166,6 @@ bool encodeImage(const std::string& inputImage,
         predictor = findBestPredictor(inputImage, tempDir, m, blockSize, verbose);
     }
     
-    // Read PPM P5
     std::ifstream ifs(inputImage, std::ios::binary);
     if (!ifs) {
         if (verbose) std::cerr << "Error: Cannot open input image: " << inputImage << "\n";
@@ -205,24 +175,23 @@ bool encodeImage(const std::string& inputImage,
     std::string magic;
     ifs >> magic;
     if (magic != "P5") {
-        if (verbose) std::cerr << "Error: Only PPM P5 (grayscale) format supported\n";
+        if (verbose) std::cerr << "Error: Not a P5 PPM file\n";
         return false;
     }
     
-    uint32_t width, height, maxval;
-    ifs >> width >> height >> maxval;
-    ifs.ignore(1);
+    uint32_t width, height, maxVal;
+    ifs >> width >> height >> maxVal;
+    ifs.get();
     
-    if (maxval != 255) {
+    if (maxVal != 255) {
         if (verbose) std::cerr << "Error: Only 8-bit grayscale supported\n";
         return false;
     }
     
     std::vector<uint8_t> pixels(width * height);
-    ifs.read(reinterpret_cast<char*>(pixels.data()), width * height);
+    ifs.read(reinterpret_cast<char*>(pixels.data()), pixels.size());
     ifs.close();
     
-    // Use per-row blocks if blockSize is 0
     uint32_t effectiveBlockSize = (blockSize == 0) ? width : blockSize;
     
     if (verbose) {
@@ -252,71 +221,20 @@ bool encodeImage(const std::string& inputImage,
     
     BitStream bs(ofs, STREAM_WRITE);
     
-    // Write file header
-    const uint32_t MAGIC = 0x47494D47; // "GIMG"
+    const uint32_t MAGIC = 0x47494D47;
     bs.write_n_bits(MAGIC, 32);
     bs.write_n_bits(width, 32);
     bs.write_n_bits(height, 32);
     bs.write_n_bits(static_cast<uint8_t>(predictor), 8);
-    bs.write_n_bits(m, 8);
+    bs.write_n_bits(m == 0 ? 0 : 255, 8);
     bs.write_n_bits(effectiveBlockSize, 32);
     
     uint64_t totalPixels = static_cast<uint64_t>(width) * height;
     uint64_t processedPixels = 0;
     
-    // OPTIONAL: Two-pass encoding for better m estimation
-    bool twoPassMode = (m == 0);  // Only if adaptive m
-    std::vector<uint32_t> optimalMPerBlock;
-    
-    if (twoPassMode && verbose) {
-        std::cout << "Using two-pass encoding for optimal m selection...\n";
-    }
-    
-    if (twoPassMode) {
-        // PASS 1: Compute all residuals and optimal m per block
-        if (verbose) std::cout << "Pass 1: Analyzing residuals... " << std::flush;
-        
-        for (uint64_t blockStart = 0; blockStart < totalPixels; blockStart += effectiveBlockSize) {
-            uint64_t blockEnd = std::min(blockStart + effectiveBlockSize, totalPixels);
-            
-            // Compute residuals for this block
-            std::vector<int32_t> blockResiduals;
-            for (uint64_t pixelIndex = blockStart; pixelIndex < blockEnd; ++pixelIndex) {
-                uint32_t y = pixelIndex / width;
-                uint32_t x = pixelIndex % width;
-                
-                uint8_t pixel = pixels[pixelIndex];
-                uint8_t left = (x > 0) ? pixels[y * width + (x - 1)] : 0;
-                uint8_t up = (y > 0) ? pixels[(y - 1) * width + x] : 0;
-                uint8_t upLeft = (x > 0 && y > 0) ? pixels[(y - 1) * width + (x - 1)] : 0;
-                
-                int32_t pred = predict(predictor, left, up, upLeft);
-                int32_t resid = static_cast<int32_t>(pixel) - pred;
-                blockResiduals.push_back(resid);
-            }
-            
-            // Compute optimal m for this block
-            double sumAbs = 0.0;
-            for (auto r : blockResiduals) {
-                sumAbs += std::abs(r);
-            }
-            double meanAbs = blockResiduals.empty() ? 1.0 : sumAbs / blockResiduals.size();
-            
-            double alpha = meanAbs / (meanAbs + 1.0);
-            uint32_t blockM = static_cast<uint32_t>(std::ceil(-1.0 / std::log2(alpha)));
-            blockM = std::max<uint32_t>(1, blockM);
-            
-            optimalMPerBlock.push_back(blockM);
-        }
-        
-        if (verbose) std::cout << "done (" << optimalMPerBlock.size() << " blocks)\n";
-    }
-    
-    // Encode blocks
     for (uint64_t blockStart = 0; blockStart < totalPixels; blockStart += effectiveBlockSize) {
         uint32_t currentBlockSize = std::min<uint32_t>(effectiveBlockSize, totalPixels - blockStart);
         
-        // Collect residuals for this block
         std::vector<int32_t> residuals;
         residuals.reserve(currentBlockSize);
         
@@ -327,43 +245,31 @@ bool encodeImage(const std::string& inputImage,
             
             uint8_t pixel = pixels[pixelIndex];
             
-            // Get neighbors for prediction
             uint8_t left = (x > 0) ? pixels[y * width + (x - 1)] : 0;
             uint8_t up = (y > 0) ? pixels[(y - 1) * width + x] : 0;
             uint8_t upLeft = (x > 0 && y > 0) ? pixels[(y - 1) * width + (x - 1)] : 0;
             
-            // Compute prediction
             int32_t pred = predict(predictor, left, up, upLeft);
-            
-            // Compute residual
             int32_t resid = static_cast<int32_t>(pixel) - pred;
             residuals.push_back(resid);
         }
         
-        // Compute adaptive m if needed
         uint32_t blockM = m;
         if (m == 0) {
-            if (!optimalMPerBlock.empty()) {
-                // Use pre-computed m from pass 1
-                size_t blockIndex = blockStart / effectiveBlockSize;
-                blockM = optimalMPerBlock[blockIndex];
-            } else {
-                // Original adaptive m computation
-                double sumAbs = 0.0;
-                for (auto r : residuals) {
-                    sumAbs += std::abs(r);
-                }
-                double meanAbs = residuals.empty() ? 1.0 : sumAbs / residuals.size();
-                
-                double alpha = meanAbs / (meanAbs + 1.0);
-                blockM = static_cast<uint32_t>(std::ceil(-1.0 / std::log2(alpha)));
-                blockM = std::max<uint32_t>(1, blockM);
+            double sumAbs = 0.0;
+            for (auto r : residuals) {
+                sumAbs += std::abs(r);
             }
+            double meanAbs = residuals.empty() ? 1.0 : sumAbs / residuals.size();
+            
+            double alpha = meanAbs / (meanAbs + 1.0);
+            blockM = static_cast<uint32_t>(std::ceil(-1.0 / std::log2(alpha)));
+            
+            blockM = std::max<uint32_t>(1, std::min<uint32_t>(4096, blockM));
             
             if (blockM == 0) blockM = 1;
         }
         
-        // DEBUG: Print block header info
         if (verbose && blockStart < 20000) {
             std::cout << "\n[Encoder Block " << (blockStart / effectiveBlockSize) 
                       << " @ pixel " << blockStart << "]";
@@ -371,42 +277,24 @@ bool encodeImage(const std::string& inputImage,
             std::cout << std::flush;
         }
         
-        // Write block header (only if adaptive m)
         if (m == 0) {
-            // Old: bs.write_n_bits(blockM, 8);  // Always 8 bits
-            
-            // New: Use variable-length encoding for small m
-            if (blockM <= 15) {
-                bs.write_bit(0);              // Flag: small m (1 bit)
-                bs.write_n_bits(blockM, 4);   // m in 4 bits (values 0-15)
-            } else if (blockM <= 255) {
-                bs.write_bit(1);              // Flag: medium m (1 bit)
-                bs.write_n_bits(blockM, 8);   // m in 8 bits (values 0-255)
-            } else {
-                bs.write_bit(1);              // Flag: large m
-                bs.write_n_bits(255, 8);      // Sentinel
-                bs.write_n_bits(blockM, 16);  // m in 16 bits
-            }
+            bs.write_n_bits(blockM, 8);
         }
         
-        // MANUAL Golomb encode (matching decoder)
         uint32_t b = static_cast<uint32_t>(std::ceil(std::log2(static_cast<double>(blockM))));
         uint32_t cutoff = (1u << b) - blockM;
         
-        // FIX: When m=1, b=0, which causes issues. Ensure b >= 1
         if (b == 0) b = 1;
         
         size_t totalBitsThisBlock = 0;
         
         for (auto resid : residuals) {
-            // Map signed -> unsigned (interleaving)
             uint32_t mapped = (resid >= 0) ? static_cast<uint32_t>(resid) << 1u
                                           : (static_cast<uint32_t>(-resid) << 1u) - 1u;
             
             uint32_t q = mapped / blockM;
             uint32_t r = mapped % blockM;
             
-            // Write unary quotient
             for (uint32_t j = 0; j < q; ++j) {
                 bs.write_bit(0);
                 totalBitsThisBlock++;
@@ -414,13 +302,11 @@ bool encodeImage(const std::string& inputImage,
             bs.write_bit(1);
             totalBitsThisBlock++;
             
-            // Write truncated binary remainder
             if (r < cutoff) {
                 if (b > 1) {
                     bs.write_n_bits(r, b - 1);
                     totalBitsThisBlock += (b - 1);
                 }
-                // If b == 1, remainder is 0 bits (m=1 case)
             } else {
                 uint32_t adjusted = r + cutoff;
                 bs.write_n_bits(adjusted, b);
@@ -440,18 +326,19 @@ bool encodeImage(const std::string& inputImage,
     
     bs.close();
     
+    std::ifstream checkSize(outputFile, std::ios::binary | std::ios::ate);
+    size_t compressedSize = checkSize.tellg();
+    checkSize.close();
+    
+    size_t originalSize = pixels.size() + 15;
+    
     if (verbose) {
-        showProgress(1.0, "Encoding", verbose);
         std::cout << "\nEncoding complete.\n";
-        
-        std::ifstream checkSize(outputFile, std::ios::binary | std::ios::ate);
-        size_t compressedSize = checkSize.tellg();
-        size_t originalSize = width * height + 15;
-        double ratio = 100.0 * (1.0 - static_cast<double>(compressedSize) / originalSize);
-        
         std::cout << "Original size:   " << originalSize << " bytes\n";
         std::cout << "Compressed size: " << compressedSize << " bytes\n";
-        std::cout << "Compression:     " << std::fixed << std::setprecision(2) << ratio << "%\n";
+        double ratio = 100.0 * (1.0 - static_cast<double>(compressedSize) / originalSize);
+        std::cout << "Compression:     " << std::fixed << std::setprecision(2) 
+                  << ratio << "%\n";
     }
     
     return true;
@@ -468,8 +355,7 @@ bool decodeImage(const std::string& inputFile,
 
     BitStream bs(ifs, STREAM_READ);
 
-    // Read header
-    const uint32_t MAGIC = 0x47494D47; // "GIMG"
+    const uint32_t MAGIC = 0x47494D47;
     uint32_t magic = bs.read_n_bits(32);
     if (magic != MAGIC) {
         if (verbose) std::cerr << "Error: Invalid file format\n";
@@ -494,30 +380,15 @@ bool decodeImage(const std::string& inputFile,
     uint64_t totalPixels = static_cast<uint64_t>(width) * height;
     uint64_t processedPixels = 0;
 
-    // Decode blocks
     for (uint64_t blockStart = 0; blockStart < totalPixels; blockStart += blockSize) {
         uint32_t currentBlockSize = std::min<uint32_t>(blockSize, totalPixels - blockStart);
 
-        // Read block m (if adaptive)
         uint32_t blockM = mFlag;
         if (mFlag == 0) {
-            // Read variable-length m
-            int smallFlag = bs.read_bit();
-            if (smallFlag == 0) {
-                // Small m (4 bits)
-                blockM = bs.read_n_bits(4);
-            } else {
-                // Medium or large m
-                blockM = bs.read_n_bits(8);
-                if (blockM == 255) {
-                    // Large m (16 bits)
-                    blockM = bs.read_n_bits(16);
-                }
-            }
-            
-            if (verbose && blockStart < 20000) {
+            blockM = bs.read_n_bits(8);
+            if (verbose && blockStart < 10000) {
                 std::cout << "\n[Decoder] Block at pixel " << blockStart 
-                          << ": read m=" << blockM;
+                          << ": read m=" << blockM << std::flush;
             }
         }
 
@@ -531,20 +402,16 @@ bool decodeImage(const std::string& inputFile,
             return false;
         }
 
-        // Manual Golomb decoding (same as encoder - don't use Golomb class)
         uint32_t b = static_cast<uint32_t>(std::ceil(std::log2(static_cast<double>(blockM))));
         uint32_t cutoff = (1u << b) - blockM;
         
-        // FIX: When m=1, b=0, which causes issues. Ensure b >= 1
         if (b == 0) b = 1;
 
-        // Decode residuals for this block
         for (uint32_t i = 0; i < currentBlockSize; ++i) {
             uint64_t pixelIndex = blockStart + i;
             uint32_t y = pixelIndex / width;
             uint32_t x = pixelIndex % width;
 
-            // Read unary quotient
             uint32_t q = 0;
             int bit;
             while ((bit = bs.read_bit()) == 0) {
@@ -559,17 +426,13 @@ bool decodeImage(const std::string& inputFile,
                 return false;
             }
 
-            // Read truncated binary remainder
             uint32_t r = 0;
             if (b > 1) {
                 r = bs.read_n_bits(b - 1);
             }
-            // If b == 1 (m=1), remainder is always 0 (no bits to read)
 
             if (r < cutoff) {
-                // Done - r uses b-1 bits
             } else {
-                // Need one more bit
                 int extraBit = bs.read_bit();
                 if (extraBit == EOF) {
                     if (verbose) std::cerr << "\nError: Unexpected EOF in remainder at pixel " << pixelIndex << "\n";
@@ -579,23 +442,18 @@ bool decodeImage(const std::string& inputFile,
                 r -= cutoff;
             }
 
-            // Calculate mapped value
             uint32_t mapped = q * blockM + r;
 
-            // Map unsigned -> signed (interleaving)
             int32_t resid = (mapped & 1u) ? -static_cast<int32_t>((mapped + 1) >> 1)
                                          : static_cast<int32_t>(mapped >> 1);
 
-            // Get neighbors for prediction
             uint8_t left = (x > 0) ? pixels[y * width + (x - 1)] : 0;
             uint8_t up = (y > 0) ? pixels[(y - 1) * width + x] : 0;
             uint8_t upLeft = (x > 0 && y > 0) ? pixels[(y - 1) * width + (x - 1)] : 0;
 
-            // Reconstruct pixel
             int32_t pred = predict(predictor, left, up, upLeft);
             int32_t pixelValue = pred + resid;
 
-            // Clamp to [0, 255]
             if (pixelValue < 0) pixelValue = 0;
             if (pixelValue > 255) pixelValue = 255;
 
@@ -610,7 +468,6 @@ bool decodeImage(const std::string& inputFile,
 
     bs.close();
 
-    // Write PPM
     std::ofstream ofs(outputImage, std::ios::binary);
     if (!ofs) {
         if (verbose) std::cerr << "Error: Cannot create output file\n";
