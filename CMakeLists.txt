@@ -49,7 +49,7 @@ target_link_libraries(golomb_main PRIVATE golomb)
 target_compile_options(golomb_main PRIVATE ${COMMON_WARNING_FLAGS})
 
 # Add bit_stream library from P/01
-set(BIT_STREAM_DIR "${CMAKE_SOURCE_DIR}/include/bit_stream/src")
+set(BIT_STREAM_DIR "${CMAKE_SOURCE_DIR}/lib/bit_stream/src")
 add_library(bit_stream STATIC
   ${BIT_STREAM_DIR}/bit_stream.cpp
   ${BIT_STREAM_DIR}/byte_stream.cpp
