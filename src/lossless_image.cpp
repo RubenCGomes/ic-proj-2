@@ -264,6 +264,54 @@ bool encodeImage(const std::string& inputImage,
     uint64_t totalPixels = static_cast<uint64_t>(width) * height;
     uint64_t processedPixels = 0;
     
+    // OPTIONAL: Two-pass encoding for better m estimation
+    bool twoPassMode = (m == 0);  // Only if adaptive m
+    std::vector<uint32_t> optimalMPerBlock;
+    
+    if (twoPassMode && verbose) {
+        std::cout << "Using two-pass encoding for optimal m selection...\n";
+    }
+    
+    if (twoPassMode) {
+        // PASS 1: Compute all residuals and optimal m per block
+        if (verbose) std::cout << "Pass 1: Analyzing residuals... " << std::flush;
+        
+        for (uint64_t blockStart = 0; blockStart < totalPixels; blockStart += effectiveBlockSize) {
+            uint64_t blockEnd = std::min(blockStart + effectiveBlockSize, totalPixels);
+            
+            // Compute residuals for this block
+            std::vector<int32_t> blockResiduals;
+            for (uint64_t pixelIndex = blockStart; pixelIndex < blockEnd; ++pixelIndex) {
+                uint32_t y = pixelIndex / width;
+                uint32_t x = pixelIndex % width;
+                
+                uint8_t pixel = pixels[pixelIndex];
+                uint8_t left = (x > 0) ? pixels[y * width + (x - 1)] : 0;
+                uint8_t up = (y > 0) ? pixels[(y - 1) * width + x] : 0;
+                uint8_t upLeft = (x > 0 && y > 0) ? pixels[(y - 1) * width + (x - 1)] : 0;
+                
+                int32_t pred = predict(predictor, left, up, upLeft);
+                int32_t resid = static_cast<int32_t>(pixel) - pred;
+                blockResiduals.push_back(resid);
+            }
+            
+            // Compute optimal m for this block
+            double sumAbs = 0.0;
+            for (auto r : blockResiduals) {
+                sumAbs += std::abs(r);
+            }
+            double meanAbs = blockResiduals.empty() ? 1.0 : sumAbs / blockResiduals.size();
+            
+            double alpha = meanAbs / (meanAbs + 1.0);
+            uint32_t blockM = static_cast<uint32_t>(std::ceil(-1.0 / std::log2(alpha)));
+            blockM = std::max<uint32_t>(1, blockM);
+            
+            optimalMPerBlock.push_back(blockM);
+        }
+        
+        if (verbose) std::cout << "done (" << optimalMPerBlock.size() << " blocks)\n";
+    }
+    
     // Encode blocks
     for (uint64_t blockStart = 0; blockStart < totalPixels; blockStart += effectiveBlockSize) {
         uint32_t currentBlockSize = std::min<uint32_t>(effectiveBlockSize, totalPixels - blockStart);
@@ -295,23 +343,23 @@ bool encodeImage(const std::string& inputImage,
         // Compute adaptive m if needed
         uint32_t blockM = m;
         if (m == 0) {
-            // Compute mean absolute residual (same as audio codec)
-            double sumAbs = 0.0;
-            for (auto r : residuals) {
-                sumAbs += std::abs(r);
+            if (!optimalMPerBlock.empty()) {
+                // Use pre-computed m from pass 1
+                size_t blockIndex = blockStart / effectiveBlockSize;
+                blockM = optimalMPerBlock[blockIndex];
+            } else {
+                // Original adaptive m computation
+                double sumAbs = 0.0;
+                for (auto r : residuals) {
+                    sumAbs += std::abs(r);
+                }
+                double meanAbs = residuals.empty() ? 1.0 : sumAbs / residuals.size();
+                
+                double alpha = meanAbs / (meanAbs + 1.0);
+                blockM = static_cast<uint32_t>(std::ceil(-1.0 / std::log2(alpha)));
+                blockM = std::max<uint32_t>(1, blockM);
             }
-            double meanAbs = residuals.empty() ? 1.0 : sumAbs / residuals.size();
             
-            // Theoretically optimal m for geometric distribution (Golomb 1966)
-            // α = mean / (mean + 1)
-            // m = ceil(-1 / log₂(α))
-            double alpha = meanAbs / (meanAbs + 1.0);
-            blockM = static_cast<uint32_t>(std::ceil(-1.0 / std::log2(alpha)));
-            
-            // Clamp to reasonable range (optional - prevents extreme values)
-            blockM = std::max<uint32_t>(1, std::min<uint32_t>(256, blockM));
-            
-            // Safety check
             if (blockM == 0) blockM = 1;
         }
         
@@ -325,7 +373,20 @@ bool encodeImage(const std::string& inputImage,
         
         // Write block header (only if adaptive m)
         if (m == 0) {
-            bs.write_n_bits(blockM, 8);
+            // Old: bs.write_n_bits(blockM, 8);  // Always 8 bits
+            
+            // New: Use variable-length encoding for small m
+            if (blockM <= 15) {
+                bs.write_bit(0);              // Flag: small m (1 bit)
+                bs.write_n_bits(blockM, 4);   // m in 4 bits (values 0-15)
+            } else if (blockM <= 255) {
+                bs.write_bit(1);              // Flag: medium m (1 bit)
+                bs.write_n_bits(blockM, 8);   // m in 8 bits (values 0-255)
+            } else {
+                bs.write_bit(1);              // Flag: large m
+                bs.write_n_bits(255, 8);      // Sentinel
+                bs.write_n_bits(blockM, 16);  // m in 16 bits
+            }
         }
         
         // MANUAL Golomb encode (matching decoder)
@@ -440,10 +501,23 @@ bool decodeImage(const std::string& inputFile,
         // Read block m (if adaptive)
         uint32_t blockM = mFlag;
         if (mFlag == 0) {
-            blockM = bs.read_n_bits(8);
-            if (verbose && blockStart < 10000) {
+            // Read variable-length m
+            int smallFlag = bs.read_bit();
+            if (smallFlag == 0) {
+                // Small m (4 bits)
+                blockM = bs.read_n_bits(4);
+            } else {
+                // Medium or large m
+                blockM = bs.read_n_bits(8);
+                if (blockM == 255) {
+                    // Large m (16 bits)
+                    blockM = bs.read_n_bits(16);
+                }
+            }
+            
+            if (verbose && blockStart < 20000) {
                 std::cout << "\n[Decoder] Block at pixel " << blockStart 
-                          << ": read m=" << blockM << std::flush;
+                          << ": read m=" << blockM;
             }
         }
 
